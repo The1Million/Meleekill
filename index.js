@@ -1,18 +1,34 @@
+// index.js (run on your Render.com or any node host)
+
 const express = require('express');
 const app = express();
-const port = process.env.PORT || 3000;
+app.use(express.json());
 
-app.get('/notify', (req, res) => {
-  const userId = req.query.userId;
-  if (userId) {
-    console.log(`User ${userId} ran the script.`);
-    // Here you can also save it to a database or file
-    res.send('Notification received');
-  } else {
-    res.status(400).send('Missing userId');
+const users = {}; // store data in-memory (replace with DB in production)
+
+app.get('/user/:id', (req, res) => {
+  const userId = req.params.id;
+  if (!users[userId]) {
+    users[userId] = { points: 0, playPoints: 0 };
   }
+  res.json(users[userId]);
 });
 
-app.listen(port, () => {
-  console.log(`API running on port ${port}`);
+app.post('/user/:id/give', (req, res) => {
+  const userId = req.params.id;
+  const { points = 0, playPoints = 0 } = req.body;
+  
+  if (!users[userId]) users[userId] = { points: 0, playPoints: 0 };
+  
+  users[userId].points += points;
+  users[userId].playPoints += playPoints;
+  
+  console.log(`User ${userId} given points: ${points}, playPoints: ${playPoints}`);
+  
+  res.json(users[userId]);
+});
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
 });
