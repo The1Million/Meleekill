@@ -39,7 +39,8 @@ app.post('/ackGive', (req, res) => {
 
   if (!pendingGives[userId]) return res.status(404).send('User not found');
 
-  pendingGives[userId] = pendingGives[userId].filter(g => g.id ~= giveId);
+  // Corrected operator here:
+  pendingGives[userId] = pendingGives[userId].filter(g => g.id !== giveId);
 
   res.json({ status: "acknowledged" });
 });
