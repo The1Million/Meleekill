@@ -4,7 +4,7 @@ app.use(express.json());
 
 // Store valid keys mapped to userIds
 const validKeys = {
-  // Example: 'ABC12345': '123456789'
+  'ABC12345': '123456789'
 };
 
 // Store pending currency changes per userId
