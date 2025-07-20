@@ -1,35 +1,41 @@
-const express = require('express')
-const app = express()
-app.use(express.json())
+const express = require("express");
+const fs = require("fs");
+const app = express();
+const port = process.env.PORT || 3000;
 
-const validKeys = {}
+const KEYS_FILE = "./keys.json";
 
-function checkKey(req, res, next) {
-  const key = req.headers['x-api-key']
-  if (!key || !validKeys[key]) {
-    return res.status(403).json({ error: 'Invalid or missing API key' })
-  }
-  req.userId = validKeys[key].userId
-  req.keyType = validKeys[key].keyType
-  next()
+// Load or initialize keys
+function loadKeys() {
+    if (!fs.existsSync(KEYS_FILE)) fs.writeFileSync(KEYS_FILE, JSON.stringify({}));
+    return JSON.parse(fs.readFileSync(KEYS_FILE));
 }
 
-app.post('/generateKeys', (req, res) => {
-  const { userId } = req.body
-  if (!userId) return res.status(400).json({ error: 'Missing userId' })
+function saveKeys(keys) {
+    fs.writeFileSync(KEYS_FILE, JSON.stringify(keys, null, 2));
+}
 
-  const key1 = Math.random().toString(36).substr(2, 8).toUpperCase()
-  const key2 = Math.random().toString(36).substr(2, 8).toUpperCase()
+function generateKey() {
+    return Math.random().toString(36).substring(2, 10).toUpperCase();
+}
 
-  validKeys[key1] = { userId: userId.toString(), keyType: 'key1' }
-  validKeys[key2] = { userId: userId.toString(), keyType: 'key2' }
+// Endpoint to verify by UserId
+app.get("/verify", (req, res) => {
+    const userId = req.query.id;
+    if (!userId) return res.json({ success: false, msg: "No UserId provided" });
 
-  res.json({ key1, key2 })
-})
+    const keys = loadKeys();
 
-app.get('/validate', checkKey, (req, res) => {
-  res.json({ userId: req.userId, keyType: req.keyType })
-})
+    if (!keys[userId]) {
+        const newKey = generateKey();
+        keys[userId] = newKey;
+        saveKeys(keys);
+        return res.json({ success: true, msg: "New key created", key: newKey });
+    }
 
-const PORT = process.env.PORT || 10000
-app.listen(PORT, () => console.log(`API listening on port ${PORT}`))
+    return res.json({ success: true, msg: "Existing key found", key: keys[userId] });
+});
+
+app.listen(port, () => {
+    console.log(`✅ Key API running on port ${port}`);
+});
