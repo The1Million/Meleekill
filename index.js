@@ -8,7 +8,7 @@ Key System + Pastebin Loader Integration (24h per-use, 7d per-key cooldown)
 ]]
 
 ------------------- CONFIG -------------------
-local PASTEBIN_RAW_URL = "https://pastebin.com/raw/2zhEEipn" -- <-- Set your pastebin raw link here
+local PASTEBIN_RAW_URL = "https://pastebin.com/raw/36ew2hmD" -- <-- Set your pastebin raw link here
 local LICENSE_DURATION = 24 * 60 * 60 -- 24 hours
 local COOLDOWN = 7 * 24 * 60 * 60    -- 7 days in seconds
 local KEY_FILE = "keysystem_userdata_main.json"
