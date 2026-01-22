@@ -1,351 +1,487 @@
---[[
-Key System + Pastebin Loader Integration (24h per-use, 7d per-key cooldown)
-- The script blocks access to the main Pastebin loader until the key is entered and either counting down or active.
-- After successful key activation, loads and executes your Pastebin script.
-- On rejoin/reload: if key is valid, auto-loads Pastebin; if key is pending, waits for user to enter it.
-- NO autofill or auto-paste of key on join. User must enter it.
-- Change PASTEBIN_RAW_URL below to your own Pastebin raw link.
-]]
+--------------------------------------------------------------------
+--  Blue Command Loader  •  FULL FINAL
+--------------------------------------------------------------------
 
-------------------- CONFIG -------------------
-local PASTEBIN_RAW_URL = "https://pastebin.com/raw/36ew2hmD" -- <-- Set your pastebin raw link here
-local LICENSE_DURATION = 24 * 60 * 60 -- 24 hours
-local COOLDOWN = 7 * 24 * 60 * 60    -- 7 days in seconds
-local KEY_FILE = "keysystem_userdata_main.json"
-local USAGE_FILE = "keysystem_usage_main.json"
+-------------------- SERVICES --------------------
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Keys = {
-    {key = "F8B2Q7W1XR", linkvertise = "https://direct-link.net/1198587/key"},
-    {key = "9JZK5VU2SM", linkvertise = "https://link-target.net/1198587/key1"},
-    {key = "XW2C3R8T1P", linkvertise = "https://direct-link.net/1198587/key2"},
-    {key = "7QH5M2L9AZ", linkvertise = "https://link-center.net/1198587/key3"},
-    {key = "Z48D1P7KSR", linkvertise = "https://link-hub.net/1198587/key4"},
-    {key = "M5XJ8Q2BZN", linkvertise = "https://link-target.net/1198587/key5"},
-    -- ... add more keys as desired!
+local LocalPlayer = Players.LocalPlayer
+
+-------------------- NOTIFY ----------------------
+local function notify(title, text, dur)
+	pcall(function()
+		game.StarterGui:SetCore("SendNotification", {
+			Title = title;
+			Text = text;
+			Duration = dur or 4;
+		})
+	end)
+end
+
+--------------------------------------------------------------------
+-- COMMAND LIST (USED BY GUI)
+--------------------------------------------------------------------
+local commands = {
+	"setammo",
+	"keepaway",
+	"rainbowzombies",
+	"autofarm v1",
+	"autofarm v2",
+	"killaura",
+	"autokill",
+	"autopowerup",
+	"autocheckpoint",
 }
 
-------------------- SERVICES/UTILS -------------------
-local HttpService = game:GetService("HttpService")
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-local RUN_SERVICE = game:GetService("RunService")
-local function fetchPastebinAndRun()
-    local suc, resp = pcall(function()
-        if syn and syn.request then
-            return syn.request({Url=PASTEBIN_RAW_URL, Method="GET"})
-        elseif http_request then
-            return http_request({Url=PASTEBIN_RAW_URL, Method="GET"})
-        elseif request then
-            return request({Url=PASTEBIN_RAW_URL, Method="GET"})
-        elseif getcustomasset then -- Some environments
-            return {Body = game:HttpGet(PASTEBIN_RAW_URL)}
-        else
-            return {Body = game:HttpGet(PASTEBIN_RAW_URL)}
-        end
-    end)
-    if suc and resp and (resp.Body or type(resp)=="string") then
-        local src = resp.Body or resp
-        local f, ferr = loadstring(src)
-        if f then
-            f()
-        else
-            warn("[KeySystem] Error loading pastebin: "..tostring(ferr))
-        end
-    else
-        warn("[KeySystem] Failed to fetch pastebin: "..tostring(resp))
-    end
+--------------------------------------------------------------------
+-- STATE FLAGS
+--------------------------------------------------------------------
+local states = {
+	keepaway = false,
+	rainbowzombies = false,
+	autofarm_v1 = false,
+	autofarm_v2 = false,
+	killaura = false,
+	autokill = false,
+	autopowerup = false,
+	autocheckpoint = false,
+}
+
+local connections = {}
+
+--------------------------------------------------------------------
+-- HELPERS
+--------------------------------------------------------------------
+local function getTool(char)
+	for _, v in ipairs(char:GetChildren()) do
+		if v:IsA("Tool") then return v end
+	end
 end
 
-local function saveKeyData(key, activatedAt, expiresAt)
-    if writefile then
-        local data = {
-            UserId = LocalPlayer.UserId,
-            Key = key,
-            ActivatedAt = activatedAt,
-            ExpiresAt = expiresAt
-        }
-        writefile(KEY_FILE, HttpService:JSONEncode(data))
-    end
+local function setSimRadius()
+	pcall(function()
+		sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+		sethiddenproperty(LocalPlayer, "MaxSimulationRadius", math.huge)
+	end)
 end
 
-local function loadKeyData()
-    if readfile and isfile and isfile(KEY_FILE) then
-        local data = HttpService:JSONDecode(readfile(KEY_FILE))
-        return data.Key, data.ActivatedAt, data.ExpiresAt, data.UserId
-    end
-    return nil, nil, nil, nil
+--------------------------------------------------------------------
+-- COMMAND HANDLERS
+--------------------------------------------------------------------
+local CommandHandlers = {}
+
+--------------------------------------------------------------------
+-- !setammo <number>
+--------------------------------------------------------------------
+CommandHandlers.setammo = function(args)
+	local amt = tonumber(args[1])
+	if not amt then return notify("Usage","!setammo <number>",4) end
+
+	local function apply(t)
+		local info = t:FindFirstChild("Info")
+		local cs = info and info:FindFirstChild("ClipSize")
+		if cs and cs:IsA("ValueBase") then
+			cs.Value = amt
+		end
+	end
+
+	for _, c in ipairs({LocalPlayer.Backpack, LocalPlayer.Character}) do
+		if c then
+			for _, t in ipairs(c:GetChildren()) do
+				if t:IsA("Tool") then apply(t) end
+			end
+		end
+	end
+
+	notify("SetAmmo","ClipSize set to "..amt,3)
 end
 
-local function clearKeyData()
-    if delfile and isfile and isfile(KEY_FILE) then
-        delfile(KEY_FILE)
-    end
+--------------------------------------------------------------------
+-- !keepaway (TOGGLE)
+--------------------------------------------------------------------
+CommandHandlers.keepaway = function()
+	states.keepaway = not states.keepaway
+
+	if not states.keepaway then
+		if connections.keepaway then
+			connections.keepaway:Disconnect()
+			connections.keepaway = nil
+		end
+		return notify("KeepAway","OFF",3)
+	end
+
+	connections.keepaway = RunService.Heartbeat:Connect(function()
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if not hrp then return end
+
+		for _, h in ipairs(Workspace:GetDescendants()) do
+			if h:IsA("Humanoid") and not Players:FindFirstChild(h.Parent.Name) then
+				local r = h.Parent:FindFirstChild("HumanoidRootPart")
+				if r and (r.Position - hrp.Position).Magnitude <= 50 then
+					h.WalkSpeed = 0
+					h.JumpPower = 0
+					h.JumpHeight = 0
+				end
+			end
+		end
+	end)
+
+	notify("KeepAway","ON",3)
 end
 
-local function loadUsageData()
-    if readfile and isfile and isfile(USAGE_FILE) then
-        return HttpService:JSONDecode(readfile(USAGE_FILE))
-    end
-    return {}
+--------------------------------------------------------------------
+-- !rainbowzombies (TOGGLE)
+--------------------------------------------------------------------
+CommandHandlers.rainbowzombies = function()
+	local folder = Workspace:WaitForChild("ActiveZombies")
+	states.rainbowzombies = not states.rainbowzombies
+
+	if not states.rainbowzombies then
+		for _, z in ipairs(folder:GetChildren()) do
+			for _, v in ipairs(z:GetChildren()) do
+				if v:IsA("Highlight") then v:Destroy() end
+			end
+			local tag = z:FindFirstChild("__RB")
+			if tag then tag:Destroy() end
+		end
+		return notify("RainbowZombies","OFF",3)
+	end
+
+	local function rainbow(t)
+		return Color3.fromHSV((t % 5) / 5, 1, 1)
+	end
+
+	local function apply(m)
+		if m:FindFirstChild("__RB") then return end
+		Instance.new("BoolValue", m).Name = "__RB"
+
+		local hl = Instance.new("Highlight", m)
+		hl.Adornee = m
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.FillTransparency = 0.7
+
+		RunService.RenderStepped:Connect(function()
+			if states.rainbowzombies and m.Parent then
+				local c = rainbow(tick())
+				hl.FillColor = c
+				hl.OutlineColor = c
+			end
+		end)
+	end
+
+	for _, z in ipairs(folder:GetChildren()) do apply(z) end
+	folder.ChildAdded:Connect(function(z)
+		task.wait()
+		if states.rainbowzombies then apply(z) end
+	end)
+
+	notify("RainbowZombies","ON",3)
 end
 
-local function saveUsageData(usage)
-    if writefile then
-        writefile(USAGE_FILE, HttpService:JSONEncode(usage))
-    end
+--------------------------------------------------------------------
+-- !autofarm v1 / v2
+--------------------------------------------------------------------
+CommandHandlers.autofarm = function(args)
+	local mode = args[1]
+	if mode ~= "v1" and mode ~= "v2" then
+		return notify("Usage","!autofarm v1 | v2",4)
+	end
+
+	-- AUTOFARM V1
+	if mode == "v1" then
+		if states.autofarm_v1 then
+			states.autofarm_v1 = false
+			if connections.autofarm_v1 then connections.autofarm_v1:Disconnect() end
+			return notify("AutoFarm v1","OFF",3)
+		end
+
+		states.autofarm_v1 = true
+		connections.autofarm_v1 = RunService.Heartbeat:Connect(function()
+			local char = LocalPlayer.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if not hrp then return end
+
+			for _, h in ipairs(Workspace:GetDescendants()) do
+				if h:IsA("Humanoid") and not Players:FindFirstChild(h.Parent.Name) then
+					local r = h.Parent:FindFirstChild("HumanoidRootPart")
+					if r then
+						r.CFrame = hrp.CFrame * CFrame.new(0,0,-10)
+					end
+				end
+			end
+		end)
+
+		return notify("AutoFarm v1","ON",3)
+	end
+
+	-- AUTOFARM V2
+	if states.autofarm_v2 then
+		states.autofarm_v2 = false
+		return notify("AutoFarm v2","OFF",3)
+	end
+
+	states.autofarm_v2 = true
+	local FireRemote = ReplicatedStorage.Events.Actions.Fire
+
+	task.spawn(function()
+		while states.autofarm_v2 do
+			task.wait(0.15)
+			local char = LocalPlayer.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if not hrp then continue end
+
+			local tool = getTool(char)
+			if not tool then continue end
+
+			local folder = Workspace:FindFirstChild("ActiveZombies")
+			if not folder then continue end
+
+			for _, z in ipairs(folder:GetChildren()) do
+				local hum = z:FindFirstChildOfClass("Humanoid")
+				local root = z:FindFirstChild("HumanoidRootPart")
+				if hum and root and hum.Health > 0 then
+					for i=1,4 do
+						local o = hrp.Position + Vector3.new(0,1.5,0)
+						local p = root.Position
+						local d = (p-o).Unit
+
+						FireRemote:FireServer(
+							tool.Name,
+							{[1]={[1]=root,[2]=p.X,[3]=p.Y,[4]=p.Z,[5]=d.X,[6]=d.Y,[7]=d.Z}},
+							{[1]={[1]=tool.Name,[2]=o.X,[3]=o.Y,[4]=o.Z,[5]=p.X,[6]=p.Y,[7]=p.Z,[8]=p.X,[9]=p.Y,[10]=p.Z,[11]=true,[12]=root,[13]=false,[14]=false,[15]="Default",[16]=tool}}
+						)
+						task.wait(0.04)
+					end
+				end
+			end
+		end
+	end)
+
+	notify("AutoFarm v2","ON",3)
 end
 
-local function formatTimeLeft(secs)
-    if not secs or secs <= 0 then return "Expired" end
-    local h = math.floor(secs/3600)
-    local m = math.floor((secs%3600)/60)
-    local s = math.floor(secs%60)
-    return string.format("%02dh %02dm %02ds", h, m, s)
+--------------------------------------------------------------------
+-- !killaura
+--------------------------------------------------------------------
+CommandHandlers.killaura = function()
+	if states.killaura then
+		states.killaura = false
+		return notify("KillAura","OFF",3)
+	end
+
+	states.killaura = true
+	local FireRemote = ReplicatedStorage.Events.Actions.Fire
+
+	task.spawn(function()
+		while states.killaura do
+			task.wait(0.2)
+			local char = LocalPlayer.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if not hrp then continue end
+
+			local tool = getTool(char)
+			if not tool then continue end
+
+			local folder = Workspace:FindFirstChild("ActiveZombies")
+			if not folder then continue end
+
+			local list = {}
+			for _, z in ipairs(folder:GetChildren()) do
+				local hum = z:FindFirstChildOfClass("Humanoid")
+				local root = z:FindFirstChild("HumanoidRootPart")
+				if hum and root and hum.Health > 0 then
+					local dist = (hrp.Position-root.Position).Magnitude
+					if dist <= 35 then
+						table.insert(list,{z=z,d=dist})
+					end
+				end
+			end
+
+			table.sort(list,function(a,b) return a.d<b.d end)
+
+			for i=1,math.min(3,#list) do
+				for s=1,3 do
+					local root = list[i].z.HumanoidRootPart
+					local o = hrp.Position + Vector3.new(0,1.5,0)
+					local p = root.Position
+					local d = (p-o).Unit
+
+					FireRemote:FireServer(
+						tool.Name,
+						{[1]={[1]=root,[2]=p.X,[3]=p.Y,[4]=p.Z,[5]=d.X,[6]=d.Y,[7]=d.Z}},
+						{[1]={[1]=tool.Name,[2]=o.X,[3]=o.Y,[4]=o.Z,[5]=p.X,[6]=p.Y,[7]=p.Z,[8]=p.X,[9]=p.Y,[10]=p.Z,[11]=true,[12]=root,[13]=false,[14]=false,[15]="Default",[16]=tool}}
+					)
+					task.wait(0.05)
+				end
+			end
+		end
+	end)
+
+	notify("KillAura","ON",3)
 end
 
-local function findLinkForKey(key)
-    for _, k in ipairs(Keys) do
-        if k.key == key then
-            return k.linkvertise
-        end
-    end
+--------------------------------------------------------------------
+-- !autokill
+--------------------------------------------------------------------
+CommandHandlers.autokill = function()
+	states.autokill = not states.autokill
+	notify("AutoKill", states.autokill and "ON" or "OFF", 3)
+
+	if states.autokill then
+		for _, d in ipairs(Workspace:GetDescendants()) do
+			if d:IsA("Humanoid") and d.Parent ~= LocalPlayer.Character then
+				d.Health = 0
+				d.MaxHealth = 0
+			end
+		end
+	end
 end
 
-local function getAvailableKeyForUser(userId)
-    local now = os.time()
-    local usage = loadUsageData()
-    local userUsage = usage[userId] or {}
-    local available = {}
-    for _, keyInfo in ipairs(Keys) do
-        local lastUsed = userUsage[keyInfo.key] or 0
-        if (now - lastUsed) > COOLDOWN then
-            table.insert(available, keyInfo)
-        end
-    end
-    if #available > 0 then
-        return available[1]
-    end
-    return nil
+--------------------------------------------------------------------
+-- !autopowerup / !autocheckpoint
+--------------------------------------------------------------------
+local function touchLoop(filter)
+	setSimRadius()
+	task.spawn(function()
+		local hrp = LocalPlayer.Character:WaitForChild("HumanoidRootPart")
+		while states[filter] do
+			task.wait(0.9)
+			for _, p in ipairs(game:GetDescendants()) do
+				if p:IsA("BasePart") and p:FindFirstChildOfClass("TouchTransmitter") then
+					if (filter=="autopowerup" and tonumber(p.Name)==nil)
+					or (filter=="autocheckpoint" and tonumber(p.Name)~=nil) then
+						firetouchinterest(hrp,p,0)
+						task.wait(0.1)
+						firetouchinterest(hrp,p,1)
+						if filter=="autocheckpoint" then task.wait(1) end
+					end
+				end
+			end
+		end
+	end)
 end
 
-local function markKeyAsUsed(userId, key)
-    local usage = loadUsageData()
-    usage[userId] = usage[userId] or {}
-    usage[userId][key] = os.time()
-    saveUsageData(usage)
+CommandHandlers.autopowerup = function()
+	states.autopowerup = not states.autopowerup
+	if states.autopowerup then touchLoop("autopowerup") end
+	notify("AutoPowerup", states.autopowerup and "ON" or "OFF", 3)
 end
 
-------------------- GUI -------------------
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "KeySystemMain"
-screenGui.ResetOnSpawn = false
-screenGui.Parent = game:GetService("CoreGui")
-
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 340, 0, 360)
-frame.Position = UDim2.new(0.5, -170, 0.5, -180)
-frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-frame.BorderSizePixel = 0
-frame.Active = true
-frame.Draggable = true
-frame.Parent = screenGui
-
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 36)
-title.BackgroundTransparency = 1
-title.Font = Enum.Font.GothamBold
-title.TextSize = 26
-title.Text = "Key System"
-title.TextColor3 = Color3.fromRGB(255, 255, 255)
-title.Parent = frame
-
-local keyBox = Instance.new("TextBox")
-keyBox.Size = UDim2.new(0.8, 0, 0, 36)
-keyBox.Position = UDim2.new(0.1, 0, 0.23, 0)
-keyBox.PlaceholderText = "Enter your key here"
-keyBox.Text = ""
-keyBox.Font = Enum.Font.Gotham
-keyBox.TextSize = 18
-keyBox.TextColor3 = Color3.fromRGB(0, 0, 0)
-keyBox.BackgroundColor3 = Color3.fromRGB(220,220,220)
-keyBox.Parent = frame
-
-local submitBtn = Instance.new("TextButton")
-submitBtn.Size = UDim2.new(0.35, 0, 0, 32)
-submitBtn.Position = UDim2.new(0.1, 0, 0.42, 0)
-submitBtn.Text = "Submit Key"
-submitBtn.Font = Enum.Font.GothamBold
-submitBtn.TextSize = 18
-submitBtn.TextColor3 = Color3.fromRGB(255,255,255)
-submitBtn.BackgroundColor3 = Color3.fromRGB(32, 146, 67)
-submitBtn.Parent = frame
-
-local getKeyBtn = Instance.new("TextButton")
-getKeyBtn.Size = UDim2.new(0.35, 0, 0, 32)
-getKeyBtn.Position = UDim2.new(0.55, 0, 0.42, 0)
-getKeyBtn.Text = "Get Key"
-getKeyBtn.Font = Enum.Font.GothamBold
-getKeyBtn.TextSize = 18
-getKeyBtn.TextColor3 = Color3.fromRGB(255,255,255)
-getKeyBtn.BackgroundColor3 = Color3.fromRGB(13, 105, 172)
-getKeyBtn.Parent = frame
-
-local infoLabel = Instance.new("TextLabel")
-infoLabel.Size = UDim2.new(0.8, 0, 0, 60)
-infoLabel.Position = UDim2.new(0.1, 0, 0.62, 0)
-infoLabel.BackgroundTransparency = 1
-infoLabel.Font = Enum.Font.Gotham
-infoLabel.TextSize = 18
-infoLabel.TextColor3 = Color3.fromRGB(255,255,255)
-infoLabel.Text = ""
-infoLabel.TextWrapped = true
-infoLabel.Parent = frame
-
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 24, 0, 24)
-closeBtn.Position = UDim2.new(1, -30, 0, 6)
-closeBtn.Text = "✕"
-closeBtn.Font = Enum.Font.GothamBold
-closeBtn.TextSize = 18
-closeBtn.TextColor3 = Color3.fromRGB(255,255,255)
-closeBtn.BackgroundColor3 = Color3.fromRGB(180,40,40)
-closeBtn.Parent = frame
-
-------------------- LOGIC -------------------
-local countdownConnection = nil
-local pastebinLoaded = false
-
-local function stopCountdown()
-    if countdownConnection then
-        countdownConnection:Disconnect()
-        countdownConnection = nil
-    end
+CommandHandlers.autocheckpoint = function()
+	states.autocheckpoint = not states.autocheckpoint
+	if states.autocheckpoint then touchLoop("autocheckpoint") end
+	notify("AutoCheckpoint", states.autocheckpoint and "ON" or "OFF", 3)
 end
 
-local function startCountdown(expiresAt)
-    stopCountdown()
-    countdownConnection = RUN_SERVICE.RenderStepped:Connect(function()
-        local now = os.time()
-        local timeLeft = expiresAt - now
-        if timeLeft > 0 then
-            infoLabel.Text = "Key valid!\nTime left: " .. formatTimeLeft(timeLeft)
-            infoLabel.TextColor3 = Color3.fromRGB(80,255,80)
-            -- Load Pastebin if not yet loaded
-            if not pastebinLoaded then
-                pastebinLoaded = true
-                screenGui.Enabled = false -- Hide key GUI
-                fetchPastebinAndRun()
-            end
-        else
-            infoLabel.Text = "Key expired. Please get a new key."
-            infoLabel.TextColor3 = Color3.fromRGB(255,80,80)
-            clearKeyData()
-            pastebinLoaded = false
-            screenGui.Enabled = true
-            stopCountdown()
-        end
-    end)
+--------------------------------------------------------------------
+-- COMMAND RUNNER
+--------------------------------------------------------------------
+local function runCmd(text)
+	local args = text:lower():split(" ")
+	local cmd = table.remove(args,1)
+	local fn = CommandHandlers[cmd]
+	if not fn then return notify("Error","Unknown command",3) end
+	fn(args)
 end
 
-getKeyBtn.MouseButton1Click:Connect(function()
-    local userId = tostring(LocalPlayer.UserId)
-    local savedKey, activatedAt, expiresAt, savedUserId = loadKeyData()
-    local now = os.time()
-    if savedKey and not expiresAt then
-        -- Reminder: Copy the link for their pending key again
-        local link = findLinkForKey(savedKey)
-        infoLabel.Text = "You already have a key ready. Click 'Get Key' to copy your link again."
-        infoLabel.TextColor3 = Color3.fromRGB(255, 230, 80)
-        if setclipboard and link then
-            setclipboard(link)
-        end
-        return
-    elseif savedKey and expiresAt and expiresAt > now then
-        infoLabel.Text = "Key valid! Time left: " .. formatTimeLeft(expiresAt - now)
-        infoLabel.TextColor3 = Color3.fromRGB(80,255,80)
-        return
-    end
+--------------------------------------------------------------------
+-- GUI (UNCHANGED)
+--------------------------------------------------------------------
+local gui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
+gui.Name = "BlueCommandGui"
+gui.ResetOnSpawn = false
 
-    local keyInfo = getAvailableKeyForUser(userId)
-    if not keyInfo then
-        infoLabel.Text = "All keys are on cooldown!\nYou must wait before getting a new key."
-        infoLabel.TextColor3 = Color3.fromRGB(255,80,80)
-        return
-    end
-    saveKeyData(keyInfo.key, nil, nil)
-    infoLabel.Text = "Linkvertise link copied!\nComplete Linkvertise to get your key."
-    infoLabel.TextColor3 = Color3.fromRGB(80,255,80)
-    if setclipboard then
-        setclipboard(keyInfo.linkvertise)
-    end
+local barBorder = Instance.new("Frame", gui)
+barBorder.Size = UDim2.new(0,308,0,38)
+barBorder.Position = UDim2.new(0.5,-154,0,40)
+barBorder.BackgroundColor3 = Color3.fromRGB(0,60,200)
+barBorder.BorderSizePixel = 0
+barBorder.Active = true
+barBorder.Draggable = true
+Instance.new("UICorner", barBorder).CornerRadius = UDim.new(0,12)
+
+local bar = Instance.new("Frame", barBorder)
+bar.Size = UDim2.new(0,300,0,30)
+bar.Position = UDim2.new(0,4,0,4)
+bar.BackgroundColor3 = Color3.fromRGB(25,25,35)
+bar.BorderSizePixel = 0
+Instance.new("UICorner", bar).CornerRadius = UDim.new(0,10)
+
+local cmdBox = Instance.new("TextBox", bar)
+cmdBox.Size = UDim2.new(1,-48,1,-8)
+cmdBox.Position = UDim2.new(0,6,0,4)
+cmdBox.BackgroundTransparency = 1
+cmdBox.Text = ""               -- FIX
+cmdBox.PlaceholderText = ""    -- FIX
+cmdBox.Font = Enum.Font.Gotham
+cmdBox.TextColor3 = Color3.fromRGB(240,240,255)
+cmdBox.TextSize = 15
+cmdBox.ClearTextOnFocus = false
+
+local menuBtn = Instance.new("TextButton", bar)
+menuBtn.Size = UDim2.new(0,30,1,-8)
+menuBtn.Position = UDim2.new(1,-36,0,4)
+menuBtn.BackgroundColor3 = Color3.fromRGB(0,60,200)
+menuBtn.Text = "≡"
+menuBtn.Font = Enum.Font.GothamBold
+menuBtn.TextColor3 = Color3.new(1,1,1)
+menuBtn.TextSize = 18
+Instance.new("UICorner", menuBtn).CornerRadius = UDim.new(0,8)
+
+local listBorder = Instance.new("Frame", gui)
+listBorder.Size = UDim2.new(0,268,0,160)
+listBorder.Position = UDim2.new(0.5,-134,0,86)
+listBorder.BackgroundColor3 = Color3.fromRGB(0,60,200)
+listBorder.BorderSizePixel = 0
+listBorder.Visible = false
+Instance.new("UICorner", listBorder).CornerRadius = UDim.new(0,12)
+
+local listFrame = Instance.new("Frame", listBorder)
+listFrame.Size = UDim2.new(1,-8,1,-8)
+listFrame.Position = UDim2.new(0,4,0,4)
+listFrame.BackgroundColor3 = Color3.fromRGB(25,25,35)
+listFrame.BorderSizePixel = 0
+Instance.new("UICorner", listFrame).CornerRadius = UDim.new(0,10)
+
+local scroll = Instance.new("ScrollingFrame", listFrame)
+scroll.Size = UDim2.new(1,-12,1,-12)
+scroll.Position = UDim2.new(0,6,0,6)
+scroll.BackgroundTransparency = 1
+scroll.ScrollBarThickness = 8
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+local layout = Instance.new("UIListLayout", scroll)
+layout.Padding = UDim.new(0,6)
+
+for _, c in ipairs(commands) do
+	local b = Instance.new("TextButton", scroll)
+	b.Size = UDim2.new(1,-10,0,30)
+	b.Text = "!"..c
+	b.BackgroundColor3 = Color3.fromRGB(35,35,55)
+	b.TextColor3 = Color3.fromRGB(200,220,255)
+	b.Font = Enum.Font.Gotham
+	b.TextSize = 16
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0,8)
+	b.MouseButton1Click:Connect(function()
+		cmdBox.Text = "!"..c.." "
+		cmdBox:CaptureFocus()
+	end)
+end
+
+menuBtn.MouseButton1Click:Connect(function()
+	listBorder.Visible = not listBorder.Visible
 end)
 
-submitBtn.MouseButton1Click:Connect(function()
-    local enteredKey = keyBox.Text
-    local userId = tostring(LocalPlayer.UserId)
-    local savedKey, activatedAt, expiresAt, savedUserId = loadKeyData()
-    local now = os.time()
-    if not savedKey then
-        infoLabel.Text = "No key assigned. Please get a key first."
-        infoLabel.TextColor3 = Color3.fromRGB(255,80,80)
-        return
-    end
-    if savedKey ~= enteredKey then
-        infoLabel.Text = "Key does not match your assigned key."
-        infoLabel.TextColor3 = Color3.fromRGB(255,80,80)
-        return
-    end
-    if expiresAt and expiresAt > now then
-        infoLabel.Text = "Key already activated!\nTime left: " .. formatTimeLeft(expiresAt - now)
-        infoLabel.TextColor3 = Color3.fromRGB(80,255,80)
-        if not pastebinLoaded then
-            pastebinLoaded = true
-            screenGui.Enabled = false
-            fetchPastebinAndRun()
-        end
-        startCountdown(expiresAt)
-        return
-    end
-    local expire = now + LICENSE_DURATION
-    saveKeyData(savedKey, now, expire)
-    markKeyAsUsed(userId, savedKey)
-    infoLabel.Text = "Key activated! Time left: " .. formatTimeLeft(LICENSE_DURATION)
-    infoLabel.TextColor3 = Color3.fromRGB(80,255,80)
-    pastebinLoaded = true
-    screenGui.Enabled = false
-    fetchPastebinAndRun()
-    startCountdown(expire)
+cmdBox.FocusLost:Connect(function(enter)
+	if enter then
+		local raw = cmdBox.Text:gsub("^!+","")
+		cmdBox.Text = ""
+		runCmd(raw)
+	end
 end)
-
-closeBtn.MouseButton1Click:Connect(function()
-    stopCountdown()
-    screenGui:Destroy()
-end)
-
-local function showTimeOnJoin()
-    local key, activatedAt, expiresAt, savedUserId = loadKeyData()
-    local now = os.time()
-    keyBox.Text = ""
-    pastebinLoaded = false
-    if key and expiresAt and expiresAt > now then
-        infoLabel.Text = "Key valid! Time left: " .. formatTimeLeft(expiresAt - now)
-        infoLabel.TextColor3 = Color3.fromRGB(80,255,80)
-        pastebinLoaded = true
-        screenGui.Enabled = false
-        fetchPastebinAndRun()
-        startCountdown(expiresAt)
-    elseif key and not expiresAt then
-        infoLabel.Text = "You already have a key ready. Click 'Get Key' to copy your link again."
-        infoLabel.TextColor3 = Color3.fromRGB(255,255,0)
-        -- Optionally: copy link again for convenience
-        local link = findLinkForKey(key)
-        if setclipboard and link then setclipboard(link) end
-    elseif key and expiresAt then
-        infoLabel.Text = "Key expired. Please get a new key."
-        infoLabel.TextColor3 = Color3.fromRGB(255,80,80)
-        clearKeyData()
-        stopCountdown()
-    end
-end
-
-showTimeOnJoin()
